@@ -2938,8 +2938,25 @@ class ModuleBuilder:
                 type_defines + warp._src.codegen.cpu_module_header.format(block_dim=self.options["block_dim"]) + source
             )
         else:
+            # Parse partition to extract shape and stride arrays
+            import warp._src.localized  # noqa: PLC0415 - deferred to avoid circular import
+
+            partition_rank, partition_shape, partition_strides = warp._src.localized.parse_cute_partition(
+                self.options["partition"]
+            )
+            partition_shape_str = ", ".join(map(str, partition_shape)) if partition_shape else ""
+            partition_strides_str = ", ".join(map(str, partition_strides)) if partition_strides else ""
+
             source = (
-                type_defines + warp._src.codegen.cuda_module_header.format(block_dim=self.options["block_dim"]) + source
+                type_defines
+                + warp._src.codegen.cuda_module_header.format(
+                    block_dim=self.options["block_dim"],
+                    have_partition=self.options["have_partition"],
+                    partition_rank=partition_rank,
+                    partition_shape=partition_shape_str,
+                    partition_strides=partition_strides_str,
+                )
+                + source
             )
 
         return source
@@ -3180,6 +3197,8 @@ class Module:
             "deterministic": warp.config.deterministic,
             "deterministic_max_records": warp.config.deterministic_max_records,
             "default_grid_stride": None,  # None means inherit warp.config.default_grid_stride
+            "partition": None,
+            "have_partition": 0,
         }
 
         # Module dependencies are determined by scanning each function

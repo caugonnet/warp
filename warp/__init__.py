@@ -575,9 +575,23 @@ from warp._src.utils import quat_between_vectors as quat_between_vectors
 from warp._src.constants import *
 
 
+# category: Localization
+
+from warp._src.localized import Layout as Layout
+from warp._src.localized import PartitionDesc as PartitionDesc
+from warp._src.localized import blocked as blocked
+from warp._src.localized import cyclic as cyclic
+from warp._src.localized import block_cyclic as block_cyclic
+from warp._src.localized import allocate_tiled_tensor as allocate_tiled_tensor
+from warp._src.localized import empty_tiled as empty_tiled
+from warp._src.localized import zeros_tiled as zeros_tiled
+from warp._src.localized import launch_tiled_localized as launch_tiled_localized
+
+
 # category: Submodules
 
 from . import config as config
+from . import localized as localized
 from . import types as types
 from . import utils as utils
 

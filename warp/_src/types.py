@@ -2232,6 +2232,14 @@ def _make_launch_bounds_class(ndim: int):
 
         self.size = size
         self.coord_mult = 1
+        self.offset = 0
+        self.partition_size = 0
+        self.partition_blocks = 0
+
+    def set_partition_params(self, offset, psize, pblocks=0):
+        self.offset = offset
+        self.partition_size = psize
+        self.partition_blocks = pblocks
 
     return type(
         f"launch_bounds_{ndim}d_t",
@@ -2241,8 +2249,12 @@ def _make_launch_bounds_class(ndim: int):
                 ("shape", ctypes.c_int32 * ndim),
                 ("size", ctypes.c_size_t),
                 ("coord_mult", ctypes.c_size_t),
+                ("offset", ctypes.c_int32),
+                ("partition_size", ctypes.c_int32),
+                ("partition_blocks", ctypes.c_int32),  # Number of CUDA blocks to launch when using partition
             ),
             "__init__": __init__,
+            "set_partition_params": set_partition_params,
         },
     )
 
