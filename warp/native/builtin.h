@@ -1895,7 +1895,33 @@ template <int N> struct launch_bounds_t {
     int shape[N];
     size_t size;
     size_t coord_mult;  // threads sharing each coord tuple; launch_coord divides linear by this before unraveling
+    int offset;         // offset for partitioned launches
+    int partition_size; // size of each partition
+    int partition_blocks; // number of CUDA blocks to launch when using partition
 };
+
+// maps a physical block index to a virtual (localized) block index through a
+// CuTe-style partition layout given as (shape, strides) of the given rank
+template <int N>
+inline CUDA_CALLABLE int apply_partition(int rank, const int* shape, const int* strides, int index, const launch_bounds_t<N>& bounds)
+{
+    if (rank == 0) {
+        return index;  // No partition, return index as-is
+    }
+
+    // Convert flat index to multi-dimensional coordinates and apply strides
+    // For row-major ordering, iterate backwards (last dimension varies fastest)
+    int offset = 0;
+    int remaining = index;
+
+    for (int i = rank - 1; i >= 0; i--) {
+        int coord = remaining % shape[i];
+        offset += coord * strides[i];
+        remaining = remaining / shape[i];
+    }
+
+    return offset;
+}
 
 // represents coordinate in the launch grid
 struct launch_coord_t {
