@@ -9,7 +9,6 @@
 //===----------------------------------------------------------------------===//
 
 #include <cccl/c/experimental/stf/stf.h>
-// #include <cccl/c/parallel/include/cccl/c/extern_c.h>
 #include <cuda/experimental/stf.cuh>
 
 using namespace cuda::experimental::stf;
@@ -49,6 +48,50 @@ void stf_logical_data(stf_ctx_handle ctx, stf_logical_data_handle* ld, void* add
   stf_logical_data_with_place(ctx, ld, addr, sz, make_host_data_place());
 }
 
+/* Convert the C-API stf_data_place to a C++ data_place object */
+data_place to_data_place(const stf_data_place* data_p)
+{
+  assert(data_p);
+
+  switch (data_p->kind)
+  {
+    case STF_DATA_PLACE_HOST:
+      return data_place::host();
+
+    case STF_DATA_PLACE_MANAGED:
+      return data_place::managed();
+
+    case STF_DATA_PLACE_AFFINE:
+      return data_place::affine();
+
+    case STF_DATA_PLACE_DEVICE:
+      return data_place::device(data_p->u.device.dev_id);
+
+    default:
+      assert(!"Invalid data place kind");
+      return data_place::invalid(); // invalid data_place
+  }
+}
+
+/* Convert the C-API stf_exec_place to a C++ exec_place object */
+exec_place to_exec_place(const stf_exec_place* exec_p)
+{
+  assert(exec_p);
+
+  switch (exec_p->kind)
+  {
+    case STF_EXEC_PLACE_HOST:
+      return exec_place::host();
+
+    case STF_EXEC_PLACE_DEVICE:
+      return exec_place::device(exec_p->u.device.dev_id);
+
+    default:
+      assert(!"Invalid execution place kind");
+      return exec_place{}; // invalid exec_place
+  }
+}
+
 void stf_logical_data_with_place(
   stf_ctx_handle ctx, stf_logical_data_handle* ld, void* addr, size_t sz, stf_data_place dplace)
 {
@@ -58,33 +101,13 @@ void stf_logical_data_with_place(
   auto* context_ptr = static_cast<context*>(ctx);
 
   // Convert C data_place to C++ data_place
-  cuda::experimental::stf::data_place cpp_dplace;
-  switch (dplace.kind)
-  {
-    case STF_DATA_PLACE_HOST:
-      cpp_dplace = cuda::experimental::stf::data_place::host();
-      break;
-    case STF_DATA_PLACE_DEVICE:
-      cpp_dplace = cuda::experimental::stf::data_place::device(dplace.u.device.dev_id);
-      break;
-    case STF_DATA_PLACE_MANAGED:
-      cpp_dplace = cuda::experimental::stf::data_place::managed();
-      break;
-    case STF_DATA_PLACE_AFFINE:
-      cpp_dplace = cuda::experimental::stf::data_place::affine();
-      break;
-    default:
-      // Invalid data place - this should not happen with valid input
-      assert(false && "Invalid data_place kind");
-      cpp_dplace = cuda::experimental::stf::data_place::host(); // fallback
-      break;
-  }
+  data_place cpp_dplace = to_data_place(&dplace);
 
   // Create logical data with the specified data place
-  auto ld_typed = context_ptr->logical_data(make_slice((char*) addr, sz), cpp_dplace);
+  auto ld_typed = context_ptr->logical_data(make_slice(static_cast<char*>(addr), sz), mv(cpp_dplace));
 
   // Store the logical_data_untyped directly as opaque pointer
-  *ld = new logical_data_untyped{ld_typed};
+  *ld = new logical_data_untyped{mv(ld_typed)};
 }
 
 void stf_logical_data_set_symbol(stf_logical_data_handle ld, const char* symbol)
@@ -111,7 +134,7 @@ void stf_logical_data_empty(stf_ctx_handle ctx, size_t length, stf_logical_data_
 
   auto* context_ptr = static_cast<context*>(ctx);
   auto ld_typed     = context_ptr->logical_data(shape_of<slice<char>>(length));
-  *to               = new logical_data_untyped{ld_typed};
+  *to               = new logical_data_untyped{mv(ld_typed)};
 }
 
 void stf_token(stf_ctx_handle ctx, stf_logical_data_handle* ld)
@@ -123,50 +146,6 @@ void stf_token(stf_ctx_handle ctx, stf_logical_data_handle* ld)
   *ld               = new logical_data_untyped{context_ptr->token()};
 }
 
-/* Convert the C-API stf_exec_place to a C++ exec_place object */
-exec_place to_exec_place(stf_exec_place* exec_p)
-{
-  assert(exec_p);
-
-  switch (exec_p->kind)
-  {
-    case STF_EXEC_PLACE_HOST:
-      return exec_place::host();
-
-    case STF_EXEC_PLACE_DEVICE:
-      return exec_place::device(exec_p->u.device.dev_id);
-
-    default:
-      assert(false && "Invalid execution place kind");
-      return exec_place{}; // invalid exec_place
-  }
-}
-
-/* Convert the C-API stf_data_place to a C++ data_place object */
-data_place to_data_place(stf_data_place* data_p)
-{
-  assert(data_p);
-
-  switch (data_p->kind)
-  {
-    case STF_DATA_PLACE_HOST:
-      return data_place::host();
-
-    case STF_DATA_PLACE_MANAGED:
-      return data_place::managed();
-
-    case STF_DATA_PLACE_AFFINE:
-      return data_place::affine();
-
-    case STF_DATA_PLACE_DEVICE:
-      return data_place::device(data_p->u.device.dev_id);
-
-    default:
-      assert(false && "Invalid data place kind");
-      return data_place::invalid(); // invalid data_place
-  }
-}
-
 void stf_task_create(stf_ctx_handle ctx, stf_task_handle* t)
 {
   assert(ctx);
@@ -176,7 +155,7 @@ void stf_task_create(stf_ctx_handle ctx, stf_task_handle* t)
   *t                = new context::unified_task<>{context_ptr->task()};
 }
 
-void stf_task_set_exec_place(stf_task_handle t, stf_exec_place* exec_p)
+void stf_task_set_exec_place(stf_task_handle t, const stf_exec_place* exec_p)
 {
   assert(t);
   assert(exec_p);
@@ -205,7 +184,7 @@ void stf_task_add_dep(stf_task_handle t, stf_logical_data_handle ld, stf_access_
 }
 
 void stf_task_add_dep_with_dplace(
-  stf_task_handle t, stf_logical_data_handle ld, stf_access_mode m, stf_data_place* data_p)
+  stf_task_handle t, stf_logical_data_handle ld, stf_access_mode m, const stf_data_place* data_p)
 {
   assert(t);
   assert(ld);
@@ -222,7 +201,7 @@ void* stf_task_get(stf_task_handle t, int index)
 
   auto* task_ptr = static_cast<context::unified_task<>*>(t);
   auto s         = task_ptr->template get<slice<const char>>(index);
-  return (void*) s.data_handle();
+  return const_cast<void*>(static_cast<const void*>(s.data_handle()));
 }
 
 void stf_task_start(stf_task_handle t)
@@ -265,40 +244,24 @@ void stf_task_destroy(stf_task_handle t)
   delete task_ptr;
 }
 
-/**
- * Low level example of cuda_kernel(_chain)
- *   auto t = ctx.cuda_kernel_chain();
-     t.add_deps(lX.read());
-     t.add_deps(lY.rw());
-     t->*[&]() {
-     auto dX = t.template get<slice<double>>(0);
-     auto dY = t.template get<slice<double>>(1);
-     return std::vector<cuda_kernel_desc> {
-         { axpy, 16, 128, 0, alpha, dX, dY },
-         { axpy, 16, 128, 0, beta, dX, dY },
-         { axpy, 16, 128, 0, gamma, dX, dY }
-     };
-  };
+// Type alias for cuda_kernel return type (used in multiple cuda_kernel functions below)
+using kernel_type = decltype(::std::declval<context>().cuda_kernel());
 
- *
- */
 void stf_cuda_kernel_create(stf_ctx_handle ctx, stf_cuda_kernel_handle* k)
 {
   assert(ctx);
   assert(k);
 
   auto* context_ptr = static_cast<context*>(ctx);
-  using kernel_type = decltype(context_ptr->cuda_kernel());
   *k                = new kernel_type{context_ptr->cuda_kernel()};
 }
 
-void stf_cuda_kernel_set_exec_place(stf_cuda_kernel_handle k, stf_exec_place* exec_p)
+void stf_cuda_kernel_set_exec_place(stf_cuda_kernel_handle k, const stf_exec_place* exec_p)
 {
   assert(k);
   assert(exec_p);
 
-  using kernel_type = decltype(::std::declval<context>().cuda_kernel());
-  auto* kernel_ptr  = static_cast<kernel_type*>(k);
+  auto* kernel_ptr = static_cast<kernel_type*>(k);
   kernel_ptr->set_exec_place(to_exec_place(exec_p));
 }
 
@@ -307,8 +270,7 @@ void stf_cuda_kernel_set_symbol(stf_cuda_kernel_handle k, const char* symbol)
   assert(k);
   assert(symbol);
 
-  using kernel_type = decltype(::std::declval<context>().cuda_kernel());
-  auto* kernel_ptr  = static_cast<kernel_type*>(k);
+  auto* kernel_ptr = static_cast<kernel_type*>(k);
   kernel_ptr->set_symbol(symbol);
 }
 
@@ -317,9 +279,8 @@ void stf_cuda_kernel_add_dep(stf_cuda_kernel_handle k, stf_logical_data_handle l
   assert(k);
   assert(ld);
 
-  using kernel_type = decltype(::std::declval<context>().cuda_kernel());
-  auto* kernel_ptr  = static_cast<kernel_type*>(k);
-  auto* ld_ptr      = static_cast<logical_data_untyped*>(ld);
+  auto* kernel_ptr = static_cast<kernel_type*>(k);
+  auto* ld_ptr     = static_cast<logical_data_untyped*>(ld);
   kernel_ptr->add_deps(task_dep_untyped(*ld_ptr, access_mode(m)));
 }
 
@@ -327,8 +288,7 @@ void stf_cuda_kernel_start(stf_cuda_kernel_handle k)
 {
   assert(k);
 
-  using kernel_type = decltype(::std::declval<context>().cuda_kernel());
-  auto* kernel_ptr  = static_cast<kernel_type*>(k);
+  auto* kernel_ptr = static_cast<kernel_type*>(k);
   kernel_ptr->start();
 }
 
@@ -343,8 +303,7 @@ void stf_cuda_kernel_add_desc_cufunc(
 {
   assert(k);
 
-  using kernel_type = decltype(::std::declval<context>().cuda_kernel());
-  auto* kernel_ptr  = static_cast<kernel_type*>(k);
+  auto* kernel_ptr = static_cast<kernel_type*>(k);
 
   cuda_kernel_desc desc;
   desc.configure_raw(cufunc, grid_dim_, block_dim_, shared_mem_, arg_cnt, args);
@@ -355,18 +314,16 @@ void* stf_cuda_kernel_get_arg(stf_cuda_kernel_handle k, int index)
 {
   assert(k);
 
-  using kernel_type = decltype(::std::declval<context>().cuda_kernel());
-  auto* kernel_ptr  = static_cast<kernel_type*>(k);
-  auto s            = kernel_ptr->template get<slice<const char>>(index);
-  return (void*) (s.data_handle());
+  auto* kernel_ptr = static_cast<kernel_type*>(k);
+  auto s           = kernel_ptr->template get<slice<const char>>(index);
+  return const_cast<void*>(static_cast<const void*>(s.data_handle()));
 }
 
 void stf_cuda_kernel_end(stf_cuda_kernel_handle k)
 {
   assert(k);
 
-  using kernel_type = decltype(::std::declval<context>().cuda_kernel());
-  auto* kernel_ptr  = static_cast<kernel_type*>(k);
+  auto* kernel_ptr = static_cast<kernel_type*>(k);
   kernel_ptr->end();
 }
 
@@ -374,8 +331,7 @@ void stf_cuda_kernel_destroy(stf_cuda_kernel_handle t)
 {
   assert(t);
 
-  using kernel_type = decltype(::std::declval<context>().cuda_kernel());
-  auto* kernel_ptr  = static_cast<kernel_type*>(t);
+  auto* kernel_ptr = static_cast<kernel_type*>(t);
   delete kernel_ptr;
 }
 

@@ -707,7 +707,7 @@ void stf_task_create(stf_ctx_handle ctx, stf_task_handle* t);
 //!
 //! \see make_device_place(), make_host_place()
 
-void stf_task_set_exec_place(stf_task_handle t, stf_exec_place* exec_p);
+void stf_task_set_exec_place(stf_task_handle t, const stf_exec_place* exec_p);
 
 //!
 //! \brief Set symbolic name for task
@@ -786,7 +786,7 @@ void stf_task_add_dep(stf_task_handle t, stf_logical_data_handle ld, stf_access_
 //! \see stf_task_add_dep(), make_device_data_place(), make_host_data_place()
 
 void stf_task_add_dep_with_dplace(
-  stf_task_handle t, stf_logical_data_handle ld, stf_access_mode m, stf_data_place* data_p);
+  stf_task_handle t, stf_logical_data_handle ld, stf_access_mode m, const stf_data_place* data_p);
 
 //!
 //! \brief Begin task execution
@@ -985,7 +985,7 @@ void stf_cuda_kernel_create(stf_ctx_handle ctx, stf_cuda_kernel_handle* k);
 //!
 //! \see make_device_place(), stf_task_set_exec_place()
 
-void stf_cuda_kernel_set_exec_place(stf_cuda_kernel_handle k, stf_exec_place* exec_p);
+void stf_cuda_kernel_set_exec_place(stf_cuda_kernel_handle k, const stf_exec_place* exec_p);
 
 //!
 //! \brief Set symbolic name for kernel
