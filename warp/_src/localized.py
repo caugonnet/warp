@@ -1004,19 +1004,19 @@ def allocate_tiled_tensor(tile_shape, tile_dim, partition_desc, streams, dtype, 
             streams=streams,
             dtype=np.float32
         )
-        wp_arr = wp.from_dlpack(arr.toDlpack())
+        wp_arr = wp.from_dlpack(arr)
     """
     import cupy as cp
     import numpy as np
 
     # Convert dtype to numpy dtype
-    from warp.types import dtype_to_numpy
+    from warp._src.types import dtype_to_numpy
 
     if isinstance(dtype, str):
         np_dtype = np.dtype(dtype)
     elif isinstance(dtype, type):
         # Check if it's a Warp type by checking the module
-        if hasattr(dtype, "__module__") and dtype.__module__ == "warp.types":
+        if getattr(dtype, "__module__", "").startswith("warp."):
             # It's a Warp type, convert it
             np_dtype = np.dtype(dtype_to_numpy(dtype))
         else:
@@ -1291,7 +1291,7 @@ def empty_tiled(shape, tile_dim, partition_desc, streams, dtype=float, page_size
     # Convert to warp array
     import warp as wp
 
-    return wp.from_dlpack(cupy_arr.toDlpack())
+    return wp.from_dlpack(cupy_arr)
 
 
 def zeros_tiled(shape, tile_dim, partition_desc, streams, dtype=float, page_size_bytes=2 * 1024 * 1024):
@@ -1361,7 +1361,7 @@ def zeros_tiled(shape, tile_dim, partition_desc, streams, dtype=float, page_size
     # Convert to warp array
     import warp as wp
 
-    return wp.from_dlpack(cupy_arr.toDlpack())
+    return wp.from_dlpack(cupy_arr)
 
 
 def launch_tiled_localized(

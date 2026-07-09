@@ -6829,7 +6829,10 @@ def codegen_kernel(kernel, device, options):
         template_forward = cpu_kernel_template_forward
         template_backward = cpu_kernel_template_backward
     elif device == "cuda":
-        if kernel.grid_stride:
+        # the partition (localization) consumer is only emitted in the grid-stride
+        # templates, so partitioned modules must use them regardless of the
+        # kernel's grid_stride setting
+        if kernel.grid_stride or options.get("have_partition"):
             template_forward = cuda_kernel_template_forward_grid_stride
             template_backward = cuda_kernel_template_backward_grid_stride
         else:

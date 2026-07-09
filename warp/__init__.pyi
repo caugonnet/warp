@@ -255,7 +255,17 @@ from warp._src.paddle import stream_from_paddle as stream_from_paddle
 from warp._src.utils import transform_expand as transform_expand
 from warp._src.utils import quat_between_vectors as quat_between_vectors
 from warp._src.constants import *
+from warp._src.localized import Layout as Layout
+from warp._src.localized import PartitionDesc as PartitionDesc
+from warp._src.localized import blocked as blocked
+from warp._src.localized import cyclic as cyclic
+from warp._src.localized import block_cyclic as block_cyclic
+from warp._src.localized import allocate_tiled_tensor as allocate_tiled_tensor
+from warp._src.localized import empty_tiled as empty_tiled
+from warp._src.localized import zeros_tiled as zeros_tiled
+from warp._src.localized import launch_tiled_localized as launch_tiled_localized
 from . import config as config
+from . import localized as localized
 from . import types as types
 from . import utils as utils
 from warp.config import DeterministicMode as DeterministicMode

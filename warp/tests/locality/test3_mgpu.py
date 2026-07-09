@@ -35,7 +35,7 @@ nbytes = nx * ny * cp.dtype(dtype).itemsize
 memptr = memory.malloc_managed(nbytes)
 
 cupy_arr = cp.ndarray((nx, ny), dtype=dtype, memptr=memptr)
-A = wp.from_dlpack(cupy_arr.toDlpack())
+A = wp.from_dlpack(cupy_arr)
 
 
 @wp.kernel
@@ -63,7 +63,7 @@ result = wp.blocked(dim=(nx // BLOCKSIZE, ny // BLOCKSIZE), places=nplaces)
 for iter in range(10):
     memptrC = memory.malloc_managed(nbytes)
     cupy_arrC = cp.ndarray((nx, ny), dtype=dtype, memptr=memptrC)
-    C = wp.from_dlpack(cupy_arrC.toDlpack())
+    C = wp.from_dlpack(cupy_arrC)
 
     e0 = wp.Event(device="cuda:0")
     get_stream("cuda:0").record_event(e0)

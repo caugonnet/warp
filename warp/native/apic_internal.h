@@ -68,7 +68,8 @@ constexpr size_t launch_bounds_coord_mult_offset(int ndim) { return launch_bound
 
 constexpr size_t launch_bounds_storage_size(int ndim)
 {
-    return launch_bounds_align8(launch_bounds_coord_mult_offset(ndim) + sizeof(size_t));
+    // coord_mult plus the trailing localization fields (offset, partition_size, partition_blocks)
+    return launch_bounds_align8(launch_bounds_coord_mult_offset(ndim) + sizeof(size_t) + 3 * sizeof(int));
 }
 
 template <int N> constexpr bool launch_bounds_layout_matches_apic_buffer()

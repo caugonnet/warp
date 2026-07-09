@@ -83,11 +83,11 @@ streams = [get_stream(f"cuda:{i % ndevices}") for i in range(nplaces_actual)]
 
 memptr = memory.malloc_managed(nbytes)
 cupy_arr = cp.ndarray((nx, ny), dtype=dtype, memptr=memptr)
-managedA = wp.from_dlpack(cupy_arr.toDlpack())
+managedA = wp.from_dlpack(cupy_arr)
 
 memptrC = memory.malloc_managed(nbytes)
 cupy_arrC = cp.ndarray((nx, ny), dtype=dtype, memptr=memptrC)
-managedC = wp.from_dlpack(cupy_arrC.toDlpack())
+managedC = wp.from_dlpack(cupy_arrC)
 
 wp.launch(range_fill_kernel, dim=(nx, ny), outputs=[managedA], device="cuda:0", block_dim=32)
 

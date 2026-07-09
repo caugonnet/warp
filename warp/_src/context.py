@@ -63,6 +63,7 @@ import numpy as np
 import warp
 import warp._src.build
 import warp._src.codegen
+import warp._src.localized
 import warp._src.module_registry
 import warp.config
 from warp._src.codegen import WarpCodegenTypeError, _codegen_lock, synchronized
@@ -2939,8 +2940,6 @@ class ModuleBuilder:
             )
         else:
             # Parse partition to extract shape and stride arrays
-            import warp._src.localized  # noqa: PLC0415 - deferred to avoid circular import
-
             partition_rank, partition_shape, partition_strides = warp._src.localized.parse_cute_partition(
                 self.options["partition"]
             )
@@ -3215,7 +3214,7 @@ class Module:
         self.references = set()  # modules whose content we depend on
         self.dependents = set()  # modules that depend on our content
 
-    def resolve_options(self, config, block_dim: int | None = None) -> dict:
+    def resolve_options(self, config, block_dim: int | None = None, partition: str | None = None) -> dict:
         """Return a fully-resolved copy of the module options.
 
         Resolves ``None`` sentinels by falling back to ``config`` values and
@@ -3225,10 +3224,17 @@ class Module:
         When ``block_dim`` is supplied, it overrides ``self.options["block_dim"]``
         in the returned dict. This lets ``Module.load`` resolve a per-load
         ``block_dim`` variant without mutating the module-level default.
+
+        When ``partition`` is supplied (a CuTe layout string), the module is
+        compiled as a localization variant: the partition layout is baked into
+        the generated CUDA source as compile-time constants.
         """
         options = dict(self.options)
         if block_dim is not None:
             options["block_dim"] = block_dim
+        if partition is not None:
+            options["partition"] = partition
+            options["have_partition"] = 1
 
         # Resolve None-means-inherit options
         if options["mode"] is None:
@@ -3473,15 +3479,27 @@ class Module:
         self.resolved_options[block_dim] = options
         return self.hashers[block_dim].get_hash()
 
+    @staticmethod
+    def _variant_key(block_dim, partition: str | None = None):
+        """Key for the per-variant caches (hashers, resolved_options).
+
+        Plain ``block_dim`` when no partition is active, so all existing
+        lookups keep working; a ``(block_dim, partition)`` pair for
+        localization variants.
+        """
+        return block_dim if partition is None else (block_dim, partition)
+
     @synchronized(_codegen_lock)
-    def get_module_hash(self, block_dim: int | None = None) -> bytes:
-        """Get the hash of the module for a block_dim variant.
+    def get_module_hash(self, block_dim: int | None = None, partition: str | None = None) -> bytes:
+        """Get the hash of the module for a (block_dim, partition) variant.
 
         If ``block_dim`` is ``None``, use the module-level default. If the
         variant hash has not been computed yet, compute and cache it.
         """
         if block_dim is None:
             block_dim = self.options["block_dim"]
+
+        variant = Module._variant_key(block_dim, partition)
 
         # Both branches below mutate shared ``@wp.func`` adjoint state
         # (``ModuleBuilder`` runs ``adj.build`` to resolve deferred
@@ -3492,20 +3510,20 @@ class Module:
         # block. Splitting the lock per stage opens a window where
         # another thread can re-run ``adj.build`` on a shared helper
         # and clobber the state this thread is about to hash.
-        if self.has_unresolved_static_expressions or block_dim not in self.hashers:
+        if self.has_unresolved_static_expressions or variant not in self.hashers:
             with _codegen_lock:
                 if self.has_unresolved_static_expressions:
-                    options = self.resolve_options(warp.config, block_dim=block_dim)
+                    options = self.resolve_options(warp.config, block_dim=block_dim, partition=partition)
                     builder_options = options | {"output_arch": None, "block_dim": block_dim}
                     _ = ModuleBuilder(self, builder_options)
                     self.has_unresolved_static_expressions = False
 
-                if block_dim not in self.hashers:
-                    options = self.resolve_options(warp.config, block_dim=block_dim)
-                    self.hashers[block_dim] = ModuleHasher(self._get_live_kernels(), options)
-                    self.resolved_options[block_dim] = options
+                if variant not in self.hashers:
+                    options = self.resolve_options(warp.config, block_dim=block_dim, partition=partition)
+                    self.hashers[variant] = ModuleHasher(self._get_live_kernels(), options)
+                    self.resolved_options[variant] = options
 
-        return self.hashers[block_dim].get_hash()
+        return self.hashers[variant].get_hash()
 
     def _refresh_deterministic_metadata_for_cache_hit(self, block_dim: int, options: dict) -> None:
         """Repopulate ``det_meta`` after a CPU or CUDA cache hit without firing tile LTO compilation."""
@@ -3524,7 +3542,7 @@ class Module:
     def _use_ptx(self, device) -> bool:
         return device.get_cuda_output_format(self.options.get("cuda_output")) == "ptx"
 
-    def get_module_identifier(self, block_dim: int | None = None) -> str:
+    def get_module_identifier(self, block_dim: int | None = None, partition: str | None = None) -> str:
         """Get an abbreviated module name to use for directories and files in the cache.
 
         Depending on the setting of the ``"strip_hash"`` option for this module,
@@ -3532,8 +3550,12 @@ class Module:
         """
         if self.options["strip_hash"]:
             module_name_short = f"wp_{self.name}"
+            if partition is not None:
+                # distinguish localization variants, which otherwise share the stripped name
+                partition_tag = hashlib.sha256(partition.encode("utf-8")).hexdigest()[:7]
+                module_name_short = f"{module_name_short}_part{partition_tag}"
         else:
-            module_hash = self.get_module_hash(block_dim)
+            module_hash = self.get_module_hash(block_dim, partition)
             module_name_short = f"wp_{self.name}_{module_hash.hex()[:7]}"
 
         return module_name_short
@@ -3551,6 +3573,7 @@ class Module:
         arch_suffix: str = "",
         use_ptx: bool | None = None,
         block_dim: int | None = None,
+        partition: str | None = None,
     ) -> str:
         """Get the filename to use for the compiled module binary.
 
@@ -3564,7 +3587,7 @@ class Module:
         produce distinct ``.o`` filenames without affecting the shared
         module directory (and thus CUDA caches).
         """
-        module_name_short = self.get_module_identifier(block_dim=block_dim)
+        module_name_short = self.get_module_identifier(block_dim=block_dim, partition=partition)
 
         if device and device.is_cpu:
             resolved_flags = _resolve_cpu_compiler_flags(
@@ -3609,12 +3632,12 @@ class Module:
 
         return output_name
 
-    def _get_meta_name(self, block_dim: int | None = None) -> str:
+    def _get_meta_name(self, block_dim: int | None = None, partition: str | None = None) -> str:
         """Get the filename to use for the module metadata file.
 
         This is only the filename. It should be used to form a path.
         """
-        return f"{self.get_module_identifier(block_dim=block_dim)}.meta"
+        return f"{self.get_module_identifier(block_dim=block_dim, partition=partition)}.meta"
 
     @synchronized(_codegen_lock)
     def _run_codegen(self, options: dict, is_cpu: bool) -> tuple[str, str, dict, list, list]:
@@ -3633,7 +3656,12 @@ class Module:
         builder = ModuleBuilder(
             self,
             options,
-            hasher=self.hashers.get(options["block_dim"], None),
+            hasher=self.hashers.get(
+                Module._variant_key(
+                    options["block_dim"], options.get("partition") if options.get("have_partition") else None
+                ),
+                None,
+            ),
         )
         if is_cpu:
             ext = "cpp"
@@ -3712,6 +3740,7 @@ class Module:
         # module dir line up with the variant being compiled -- not the
         # module-level default in ``self.options["block_dim"]``.
         active_block_dim = options["block_dim"]
+        active_partition = options.get("partition") if options.get("have_partition") else None
 
         # Resolve the arch suffix once for both the output filename and the build call
         if not is_cpu:
@@ -3727,11 +3756,11 @@ class Module:
 
         if output_name is None:
             output_name = self._get_compile_output_name(
-                device, output_arch, arch_suffix, use_ptx, block_dim=active_block_dim
+                device, output_arch, arch_suffix, use_ptx, block_dim=active_block_dim, partition=active_partition
             )
 
         # Resolve output directory early so we can check for cached binaries
-        module_name_short = self.get_module_identifier(block_dim=active_block_dim)
+        module_name_short = self.get_module_identifier(block_dim=active_block_dim, partition=active_partition)
 
         if output_dir is None:
             output_dir = os.path.join(warp.config.kernel_cache_dir, f"{module_name_short}")
@@ -3744,7 +3773,9 @@ class Module:
             warp.config.cache_kernels
             and not options.get("verify_autograd_array_access", False)
             and os.path.exists(os.path.join(output_dir, output_name))
-            and os.path.exists(os.path.join(output_dir, self._get_meta_name(block_dim=active_block_dim)))
+            and os.path.exists(
+                os.path.join(output_dir, self._get_meta_name(block_dim=active_block_dim, partition=active_partition))
+            )
         ):
             return False
 
@@ -3762,7 +3793,7 @@ class Module:
         # kernels in the same module silently fail to launch.
         source_str, source_code_ext, meta, ltoir_values, fatbin_values = self._run_codegen(options, is_cpu)
 
-        meta_path = os.path.join(output_dir, self._get_meta_name(block_dim=active_block_dim))
+        meta_path = os.path.join(output_dir, self._get_meta_name(block_dim=active_block_dim, partition=active_partition))
 
         build_dir = os.path.normpath(output_dir) + f"_p{os.getpid()}_t{threading.get_ident()}"
 
@@ -3835,16 +3866,18 @@ class Module:
                 _check_and_raise_long_path_error(e)
 
             if is_cpu:
-                self.failed_builds.add((None, active_block_dim))
+                self.failed_builds.add((None, Module._variant_key(active_block_dim, active_partition)))
             elif device:
-                self.failed_builds.add((device.context, active_block_dim))
+                self.failed_builds.add((device.context, Module._variant_key(active_block_dim, active_partition)))
 
             raise (e)
 
         # ------------------------------------------------------------
         # write meta data (already produced by ``_run_codegen`` above)
 
-        output_meta_path = os.path.join(build_dir, self._get_meta_name(block_dim=active_block_dim))
+        output_meta_path = os.path.join(
+            build_dir, self._get_meta_name(block_dim=active_block_dim, partition=active_partition)
+        )
 
         with open(output_meta_path, "w") as meta_file:
             json.dump(meta, meta_file)
@@ -3902,6 +3935,7 @@ class Module:
         binary_path: os.PathLike | None = None,
         output_arch: int | None = None,
         meta_path: os.PathLike | None = None,
+        partition: str | None = None,
     ) -> ModuleExec | None:
         device = runtime.get_device(device)
 
@@ -3912,10 +3946,14 @@ class Module:
         # launch's block_dim=1 override cannot retarget later CUDA preloads.
         active_block_dim = block_dim if block_dim is not None else self.options["block_dim"]
 
+        # localization variants (partition baked into the generated source) are
+        # cached separately from the plain module
+        variant = Module._variant_key(active_block_dim, partition)
+
         # check if executable module is already loaded and not stale
-        exec = self.execs.get((device.context, active_block_dim))
+        exec = self.execs.get((device.context, variant))
         if exec is not None:
-            current_hash = self.get_module_hash(active_block_dim)
+            current_hash = self.get_module_hash(active_block_dim, partition)
             if self.options["strip_hash"] or (exec.module_hash == current_hash):
                 return exec
             # else: Hash mismatch means module changed, need to recompile
@@ -3925,14 +3963,14 @@ class Module:
                 log_debug(f"[Module.load] Module hash changed, recompiling: {self.name} ({old_str} -> {new_str})")
 
         # quietly avoid repeated build attempts to reduce error spew
-        if (device.context, active_block_dim) in self.failed_builds:
+        if (device.context, variant) in self.failed_builds:
             return None
 
-        module_hash = self.get_module_hash(active_block_dim)
-        options = self.resolved_options[active_block_dim]
+        module_hash = self.get_module_hash(active_block_dim, partition)
+        options = self.resolved_options[variant]
 
         # use a unique module path using the module short hash
-        module_name_short = self.get_module_identifier(active_block_dim)
+        module_name_short = self.get_module_identifier(active_block_dim, partition)
 
         module_load_timer_name = (
             f"Module {self.name} {module_hash.hex()[:7]} load on device '{device}'"
@@ -3970,11 +4008,11 @@ class Module:
                 else:
                     module_load_timer.extra_msg = " (cached)"
             else:
-                output_name = self._get_compile_output_name(device, block_dim=active_block_dim)
+                output_name = self._get_compile_output_name(device, block_dim=active_block_dim, partition=partition)
                 output_arch = self._get_compile_arch(device)
 
                 module_dir = os.path.join(warp.config.kernel_cache_dir, module_name_short)
-                meta_path = os.path.join(module_dir, self._get_meta_name(block_dim=active_block_dim))
+                meta_path = os.path.join(module_dir, self._get_meta_name(block_dim=active_block_dim, partition=partition))
                 binary_path = os.path.join(module_dir, output_name)
 
                 try:
@@ -4011,13 +4049,13 @@ class Module:
                 ):
                     raise Exception(f"Failed to load CPU module '{self.name}' ({module_load_diagnostics})")
                 module_exec = ModuleExec(module_handle, module_hash, device, meta, active_block_dim, output_arch)
-                self.execs[(None, active_block_dim)] = module_exec
+                self.execs[(None, variant)] = module_exec
 
             elif device.is_cuda:
                 cuda_module = warp._src.build.load_cuda(binary_path, device)
                 if cuda_module is not None:
                     module_exec = ModuleExec(cuda_module, module_hash, device, meta, active_block_dim, output_arch)
-                    self.execs[(device.context, active_block_dim)] = module_exec
+                    self.execs[(device.context, variant)] = module_exec
                 else:
                     module_load_timer.extra_msg = " (error)"
                     raise Exception(f"Failed to load CUDA module '{self.name}' ({module_load_diagnostics})")
@@ -10311,6 +10349,8 @@ def launch(
     record_cmd: bool = False,
     max_blocks: int = 0,
     block_dim: int = 256,
+    partition: str | warp._src.localized.Layout | None = None,
+    offset: int = 0,
 ):
     """Launch a Warp kernel on the target device
 
@@ -10338,6 +10378,11 @@ def launch(
           ``@wp.kernel(grid_stride=False)`` and ``max_blocks > 0`` raises
           a ``RuntimeError``.
         block_dim: The number of threads per block (always 1 for "cpu" devices).
+        partition: Optional :class:`warp.Layout` object or CuTe-style string
+          (e.g. ``"(5,5):(2,20)"``) specifying the localization partition
+          layout. The layout is baked into a per-partition module
+          specialization at compile time.
+        offset: Starting virtual block offset for partitioned launches.
     """
 
     init()
@@ -10362,6 +10407,23 @@ def launch(
         get_logger().info(f"kernel: {kernel.key} dim: {dim} inputs: {inputs} outputs: {outputs} device: {device}")
 
     dim, total_dim_size = _normalize_launch_dim(dim)
+
+    # normalize the partition layout and compute the number of blocks it covers
+    partition_str = None
+    partition_blocks = 0
+    if partition is not None:
+        if isinstance(partition, warp._src.localized.Layout):
+            partition_str = partition.to_string()
+            partition_shape = partition.shape
+        elif isinstance(partition, str):
+            partition_str = partition
+            _, partition_shape, _ = warp._src.localized.parse_cute_partition(partition)
+        else:
+            raise TypeError(f"partition must be a warp.Layout object or a CuTe layout string, got {type(partition)}")
+
+        partition_blocks = 1
+        for s in partition_shape:
+            partition_blocks *= s
 
     if total_dim_size > 0:
         fwd_args = []
@@ -10391,7 +10453,7 @@ def launch(
 
         # delay load modules, including new overload if needed
         try:
-            module_exec = kernel.module.load(device, block_dim)
+            module_exec = kernel.module.load(device, block_dim, partition=partition_str)
         except Exception:
             kernel.adj.skip_build = True
             raise
@@ -10399,7 +10461,11 @@ def launch(
         if not module_exec:
             return
 
-        if not kernel.grid_stride and not device.is_cpu:
+        # partitioned modules are always compiled with the grid-stride templates
+        # (see codegen_kernel), regardless of the kernel's own grid_stride setting
+        effective_grid_stride = kernel.grid_stride or partition_str is not None
+
+        if not effective_grid_stride and not device.is_cpu:
             if max_blocks > 0:
                 raise RuntimeError(
                     f"Kernel '{kernel.key}' was launched with max_blocks={max_blocks}, but it was compiled "
@@ -10419,6 +10485,8 @@ def launch(
                 )
 
         bounds = _build_launch_bounds_from_tuple(dim, kernel.adj.kernel_dim)
+        if partition_str is not None:
+            bounds.set_partition_params(offset, bounds.size, partition_blocks)
 
         # first param is the number of threads
         params = [bounds]
@@ -10631,7 +10699,7 @@ def launch(
                         bounds.size,
                         max_blocks,
                         block_dim,
-                        int(kernel.grid_stride),
+                        int(effective_grid_stride),
                         cluster_dim,
                         hooks.backward_smem_bytes,
                         kernel_params,
@@ -10679,7 +10747,7 @@ def launch(
                         bounds.size,
                         max_blocks,
                         block_dim,
-                        int(kernel.grid_stride),
+                        int(effective_grid_stride),
                         cluster_dim,
                         hooks.forward_smem_bytes,
                         kernel_params,
