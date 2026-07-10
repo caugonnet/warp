@@ -1,7 +1,6 @@
 import ast
 import random
 
-
 # ==============================================================================
 # Layout Class
 # ==============================================================================
@@ -367,7 +366,7 @@ class PartitionDesc:
         self.partition_inverse_cute = None
         if offset_layout is not None:
             try:
-                import pycute
+                import pycute  # noqa: PLC0415
 
                 # Create hierarchical cute layout: ((offset_shape), (partition_shape))
                 self.partition_cute = pycute.Layout(
@@ -410,7 +409,7 @@ class PartitionDesc:
             return None
 
         try:
-            import pycute
+            import pycute  # noqa: PLC0415
 
             # Apply inverse partition to get coordinates in partition space
             inv_idx = self.partition_inverse_cute(elem_idx)
@@ -569,7 +568,7 @@ def cyclic(
     # Direct mode: compute PartitionDesc
     if dim is None or places is None:
         raise ValueError("cyclic() requires either both dim and places, or neither (for policy mode)")
-    dim = tuple(int(d) for d in dim) if isinstance(dim, list) else tuple(int(d) for d in dim)
+    dim = tuple(int(d) for d in dim)
     rank = len(dim)
 
     # Parse places
@@ -579,7 +578,7 @@ def cyclic(
         if rank == 1:
             places_shape = (places,)
         elif rank == 2:
-            import math
+            import math  # noqa: PLC0415
 
             sqrt_places = int(math.sqrt(places))
             while places % sqrt_places != 0 and sqrt_places > 1:
@@ -602,7 +601,7 @@ def cyclic(
 
     # Partition stride: for round-robin in linearized column-major layout
     # For column-major: element (i, j, ...) at position i + j*dim[0] + k*dim[0]*dim[1] + ...
-    # Stride in dimension i: places_shape[i] × product of all dimensions before i
+    # Stride in dimension i: places_shape[i] x product of all dimensions before i
     partition_stride = []
     for i in range(rank):
         stride = places_shape[i]
@@ -662,7 +661,7 @@ def block_cyclic(
         if rank == 1:
             places_shape = (places,)
         else:
-            import math
+            import math  # noqa: PLC0415
 
             sqrt_places = int(math.sqrt(places))
             while places % sqrt_places != 0 and sqrt_places > 1:
@@ -706,7 +705,7 @@ def parse_cute_partition(partition_str):
     if len(parts := partition_str.split(":")) != 2:
         raise ValueError(f"Invalid partition format: {partition_str}")
 
-    shape_list, stride_list = map(lambda x: list(ast.literal_eval(x)), parts)
+    shape_list, stride_list = (list(ast.literal_eval(x)) for x in parts)
 
     if len(shape_list) != len(stride_list):
         raise ValueError(f"Shape and stride must have same length. Got shape={shape_list}, stride={stride_list}")
@@ -754,7 +753,10 @@ def allocate_blocks_vmm(block_sizes, streams, use_vmm=True):
     VirtualMemoryResourceOptions = None
     if use_vmm:
         try:
-            from cuda.core.experimental import VirtualMemoryResource, VirtualMemoryResourceOptions
+            from cuda.core.experimental import (  # noqa: PLC0415, F401
+                VirtualMemoryResource,
+                VirtualMemoryResourceOptions,
+            )
 
             vmm_available = True
         except (ImportError, AttributeError):
@@ -762,10 +764,10 @@ def allocate_blocks_vmm(block_sizes, streams, use_vmm=True):
 
     # Fallback to cupy allocation (VMM not available)
     if not vmm_available:
-        import cupy as cp
+        import cupy as cp  # noqa: PLC0415
 
         allocations = []
-        for i, (size, stream) in enumerate(zip(block_sizes, streams)):
+        for size, stream in zip(block_sizes, streams, strict=True):
             # Get device ordinal directly from stream
             device_ordinal = stream.device.ordinal if hasattr(stream.device, "ordinal") else 0
             device_alias = stream.device.alias if hasattr(stream.device, "alias") else "cuda:0"
@@ -781,8 +783,8 @@ def allocate_blocks_vmm(block_sizes, streams, use_vmm=True):
     # VMM path using low-level CUDA driver API
     # Reserve a single virtual address space, then create separate physical
     # allocations for each block, mapping them to their offsets
-    import cuda.bindings.driver as cuda_driver
-    import cupy as cp
+    import cuda.bindings.driver as cuda_driver  # noqa: PLC0415
+    import cupy as cp  # noqa: PLC0415
 
     # Collect all unique devices
     all_device_ordinals = set()
@@ -796,7 +798,7 @@ def allocate_blocks_vmm(block_sizes, streams, use_vmm=True):
     total_size = sum(block_sizes)
 
     # Get allocation granularity (use first device as reference)
-    first_device_ordinal = list(all_device_ordinals)[0]
+    first_device_ordinal = next(iter(all_device_ordinals))
     prop = cuda_driver.CUmemAllocationProp()
     prop.type = cuda_driver.CUmemAllocationType.CU_MEM_ALLOCATION_TYPE_PINNED
     prop.location.type = cuda_driver.CUmemLocationType.CU_MEM_LOCATION_TYPE_DEVICE
@@ -835,7 +837,7 @@ def allocate_blocks_vmm(block_sizes, streams, use_vmm=True):
     current_offset = 0
 
     try:
-        for i, (size, stream) in enumerate(zip(block_sizes, streams)):
+        for i, (size, stream) in enumerate(zip(block_sizes, streams, strict=True)):
             # Get device for this block
             device_ordinal = stream.device.ordinal if hasattr(stream.device, "ordinal") else 0
             device_alias = stream.device.alias if hasattr(stream.device, "alias") else f"cuda:{device_ordinal}"
@@ -921,10 +923,10 @@ def allocate_blocks_vmm(block_sizes, streams, use_vmm=True):
     except Exception as e:
         # Cleanup on failure
         print("VMM: Allocation failed, cleaning up...")
-        for handle, size in handles:
+        for handle, _size in handles:
             cuda_driver.cuMemRelease(handle)
         cuda_driver.cuMemAddressFree(base_dptr, aligned_total_size)
-        raise RuntimeError(f"VMM allocation with low-level API failed: {e}")
+        raise RuntimeError(f"VMM allocation with low-level API failed: {e}") from e
 
     return allocations
 
@@ -938,7 +940,7 @@ def visualize_2d_allocation(global_shape, element_to_place_map, num_places):
         element_to_place_map: Dictionary mapping element index to place
         num_places: Number of places
     """
-    from pycute.core.htuple import leaves
+    from pycute.core.htuple import leaves  # noqa: PLC0415
 
     # Get 2D dimensions
     dims = list(leaves(global_shape))
@@ -1006,11 +1008,11 @@ def allocate_tiled_tensor(tile_shape, tile_dim, partition_desc, streams, dtype, 
         )
         wp_arr = wp.from_dlpack(arr)
     """
-    import cupy as cp
-    import numpy as np
+    import cupy as cp  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
 
     # Convert dtype to numpy dtype
-    from warp._src.types import dtype_to_numpy
+    from warp._src.types import dtype_to_numpy  # noqa: PLC0415
 
     if isinstance(dtype, str):
         np_dtype = np.dtype(dtype)
@@ -1042,7 +1044,7 @@ def allocate_tiled_tensor(tile_shape, tile_dim, partition_desc, streams, dtype, 
     # Compute global shape in elements by multiplying tile_shape by tile_dim
     # e.g., tile_shape=(128, 128), tile_dim=(64, 64) -> global_shape=(8192, 8192)
     if isinstance(tile_shape, (list, tuple)):
-        global_shape = tuple(ts * td for ts, td in zip(tile_shape, tile_dim))
+        global_shape = tuple(ts * td for ts, td in zip(tile_shape, tile_dim, strict=True))
     else:
         # 1D case
         global_shape = (tile_shape * tile_dim[0],)
@@ -1176,8 +1178,8 @@ def allocate_tiled_tensor(tile_shape, tile_dim, partition_desc, streams, dtype, 
         vmm_allocations = allocate_blocks_vmm(block_sizes, block_streams)
         print(f"✓ Allocated {len(vmm_allocations)} memory blocks")
     except Exception as e:
-        import sys
-        import traceback
+        import sys  # noqa: PLC0415
+        import traceback  # noqa: PLC0415
 
         print(f"✗ VMM allocation failed: {e}")
         if False:  # Set to True for detailed debugging
@@ -1185,7 +1187,7 @@ def allocate_tiled_tensor(tile_shape, tile_dim, partition_desc, streams, dtype, 
             traceback.print_exception(type(e), e, e.__traceback__, file=sys.stdout)
         print("Falling back to simple allocation...")
         # Fallback: allocate on first device
-        from cupy.cuda import memory
+        from cupy.cuda import memory  # noqa: PLC0415
 
         memptr = memory.malloc_managed(footprint_bytes)
         cupy_arr = cp.ndarray(global_shape, dtype=np_dtype, memptr=memptr)
@@ -1215,7 +1217,7 @@ def allocate_tiled_tensor(tile_shape, tile_dim, partition_desc, streams, dtype, 
     # Multiple allocations or need to create unified view
     # Fall back to managed memory for simplicity
     print("Multiple allocations detected, creating unified managed memory view...")
-    from cupy.cuda import memory
+    from cupy.cuda import memory  # noqa: PLC0415
 
     memptr = memory.malloc_managed(footprint_bytes)
     cupy_arr = cp.ndarray(global_shape, dtype=np_dtype, memptr=memptr)
@@ -1270,7 +1272,7 @@ def empty_tiled(shape, tile_dim, partition_desc, streams, dtype=float, page_size
     """
     # Compute tile shape from global shape and tile dimensions
     if isinstance(shape, (list, tuple)) and isinstance(tile_dim, (list, tuple)):
-        tile_shape = tuple(s // td for s, td in zip(shape, tile_dim))
+        tile_shape = tuple(s // td for s, td in zip(shape, tile_dim, strict=True))
     else:
         tile_shape = shape // tile_dim
 
@@ -1289,7 +1291,7 @@ def empty_tiled(shape, tile_dim, partition_desc, streams, dtype=float, page_size
     )
 
     # Convert to warp array
-    import warp as wp
+    import warp as wp  # noqa: PLC0415
 
     return wp.from_dlpack(cupy_arr)
 
@@ -1337,7 +1339,7 @@ def zeros_tiled(shape, tile_dim, partition_desc, streams, dtype=float, page_size
     """
     # Compute tile shape from global shape and tile dimensions
     if isinstance(shape, (list, tuple)) and isinstance(tile_dim, (list, tuple)):
-        tile_shape = tuple(s // td for s, td in zip(shape, tile_dim))
+        tile_shape = tuple(s // td for s, td in zip(shape, tile_dim, strict=True))
     else:
         tile_shape = shape // tile_dim
 
@@ -1359,7 +1361,7 @@ def zeros_tiled(shape, tile_dim, partition_desc, streams, dtype=float, page_size
     cupy_arr.fill(0)
 
     # Convert to warp array
-    import warp as wp
+    import warp as wp  # noqa: PLC0415
 
     return wp.from_dlpack(cupy_arr)
 
@@ -1411,7 +1413,7 @@ def launch_tiled_localized(
             streams=streams
         )
     """
-    import warp as wp
+    import warp as wp  # noqa: PLC0415
 
     if mapping is None:
         raise ValueError("mapping (PartitionDesc or policy function) must be provided")
@@ -1467,3 +1469,86 @@ def launch_tiled_localized(
             ei = wp.Event(device=stream.device)
             stream.record_event(ei)
             primary_stream.wait_event(ei)
+
+
+# Keeps cuda.core Context objects (and their SM resource groups) alive for the
+# lifetime of the process: Warp devices mapped from these contexts (and streams
+# created on them) reference the underlying driver contexts.
+_green_context_registry = []
+
+
+def green_places(n_places=None, sms_per_place=None, device_ordinal=0, alias_prefix=None):
+    """Partition a device's SMs into green contexts and return one stream per partition.
+
+    Each partition (a CUDA green context created through cuda.core) is mapped as
+    a Warp device via ``wp.map_cuda_device()``, and a stream is created on it.
+    The returned streams can be passed directly as the ``streams`` argument of
+    :func:`launch_tiled_localized`, so kernels launched on place ``i`` only use
+    the SMs of partition ``i``.
+
+    The same cuda.core ``Context`` objects (available as ``stream.green_context``)
+    can also be handed to other frameworks (e.g. CUDASTF's
+    ``exec_place.from_context``), in which case both frameworks share the exact
+    same SM partitions.
+
+    Args:
+        n_places: Number of places to create. If ``None``, derived from
+            ``sms_per_place`` and the device's SM count.
+        sms_per_place: Number of SMs per place. If ``None``, derived from
+            ``n_places`` (evenly dividing the device's SM count). At least one
+            of ``n_places`` and ``sms_per_place`` must be given.
+        device_ordinal: The CUDA device to partition.
+        alias_prefix: Prefix for the Warp device aliases (default
+            ``"cuda:{device_ordinal}.green"``).
+
+    Returns:
+        List of ``wp.Stream``, one per place, each on a Warp device backed by a
+        green context. The backing cuda.core ``Context`` is attached to each
+        stream as ``stream.green_context``.
+
+    Requires cuda-core >= 1.0 (green context support) and CUDA >= 12.4.
+    """
+    import warp as wp  # noqa: PLC0415
+
+    try:
+        from cuda.core import Device as _CoreDevice  # noqa: PLC0415
+        from cuda.core._context import ContextOptions  # noqa: PLC0415
+        from cuda.core._device_resources import SMResourceOptions  # noqa: PLC0415
+    except ImportError as e:
+        raise RuntimeError("green_places() requires cuda-core >= 1.0 with green context support") from e
+
+    dev = _CoreDevice(device_ordinal)
+    dev.set_current()
+    sm = dev.resources.sm
+
+    if n_places is None and sms_per_place is None:
+        raise ValueError("at least one of n_places and sms_per_place must be given")
+    if sms_per_place is None:
+        sms_per_place = max(sm.sm_count // n_places, sm.min_partition_size)
+    if n_places is None:
+        n_places = sm.sm_count // max(sms_per_place, sm.min_partition_size)
+    if n_places <= 0 or sms_per_place <= 0:
+        raise ValueError(f"invalid partitioning: n_places={n_places}, sms_per_place={sms_per_place}")
+
+    # cuda.core semantics: count as a Sequence[int] requests one group per
+    # entry in a single split call (re-splitting the remainder is not allowed)
+    groups, _remainder = sm.split(SMResourceOptions(count=[sms_per_place] * n_places))
+    if len(groups) < n_places:
+        raise RuntimeError(
+            f"could not partition device {device_ordinal} into {n_places} places of "
+            f"{sms_per_place} SMs (driver returned {len(groups)} groups)"
+        )
+
+    if alias_prefix is None:
+        alias_prefix = f"cuda:{device_ordinal}.green"
+
+    streams = []
+    for i, group in enumerate(groups[:n_places]):
+        ctx = dev.create_context(ContextOptions(resources=[group]))
+        _green_context_registry.append(ctx)
+        device = wp.map_cuda_device(f"{alias_prefix}{i}", int(ctx.handle))
+        stream = wp.Stream(device)
+        stream.green_context = ctx
+        streams.append(stream)
+
+    return streams

@@ -264,6 +264,7 @@ from warp._src.localized import allocate_tiled_tensor as allocate_tiled_tensor
 from warp._src.localized import empty_tiled as empty_tiled
 from warp._src.localized import zeros_tiled as zeros_tiled
 from warp._src.localized import launch_tiled_localized as launch_tiled_localized
+from warp._src.localized import green_places as green_places
 from . import config as config
 from . import localized as localized
 from . import types as types
